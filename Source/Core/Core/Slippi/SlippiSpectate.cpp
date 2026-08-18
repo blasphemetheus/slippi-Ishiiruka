@@ -10,6 +10,10 @@
 #include <ws2tcpip.h>
 #else
 #include <errno.h>
+#include <fcntl.h>
+#include <sys/socket.h>
+#include <sys/un.h>
+#include <unistd.h>
 #endif
 
 // CALLED FROM DOLPHIN MAIN THREAD
@@ -27,9 +31,131 @@ void SlippiSpectateServer::write(u8 *payload, u32 length)
 	{
 		return;
 	}
+	directWrite(payload, length);
 	std::string str_payload((char *)payload, length);
 	m_event_queue.Push(str_payload);
 	m_wake_cv.notify_one();
+}
+
+// CALLED FROM DOLPHIN MAIN THREAD. Sends one length-prefixed payload to
+// the direct-channel client, if any. Non-blocking: rather than ever
+// stalling emulation on a slow client, the client is dropped (it will
+// notice the closed socket and can reconnect).
+void SlippiSpectateServer::directWrite(const u8 *payload, u32 length)
+{
+#ifndef _WIN32
+	int fd = m_direct_fd.load(std::memory_order_acquire);
+	if (fd < 0)
+	{
+		return;
+	}
+
+	u8 header[4] = {(u8)(length >> 24), (u8)(length >> 16), (u8)(length >> 8), (u8)length};
+	struct iovec iov[2];
+	iov[0].iov_base = header;
+	iov[0].iov_len = 4;
+	iov[1].iov_base = (void *)payload;
+	iov[1].iov_len = length;
+
+	struct msghdr msg = {};
+	msg.msg_iov = iov;
+	msg.msg_iovlen = 2;
+
+	ssize_t sent = sendmsg(fd, &msg, MSG_NOSIGNAL);
+	if (sent < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
+	{
+		WARN_LOG(SLIPPI, "Direct channel client too slow; dropping it");
+	}
+	else if (sent == (ssize_t)(4 + length))
+	{
+		return;
+	}
+	else
+	{
+		// Partial writes would desync the framing; treat them (and any
+		// other error) like a disconnect too. The send buffer is large
+		// enough (see directAccept) that a healthy client never hits
+		// this.
+		WARN_LOG(SLIPPI, "Direct channel write failed (%zd); dropping client", sent);
+	}
+
+	m_direct_fd.store(-1, std::memory_order_release);
+	close(fd);
+#else
+	(void)payload;
+	(void)length;
+#endif
+}
+
+// CALLED FROM SERVER THREAD
+void SlippiSpectateServer::directListen(const std::string &path)
+{
+#ifndef _WIN32
+	unlink(path.c_str());
+
+	int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK, 0);
+	if (fd < 0)
+	{
+		WARN_LOG(SLIPPI, "Could not create direct channel socket at %s", path.c_str());
+		return;
+	}
+
+	struct sockaddr_un addr = {};
+	addr.sun_family = AF_UNIX;
+	if (path.length() >= sizeof(addr.sun_path))
+	{
+		WARN_LOG(SLIPPI, "Direct channel path too long: %s", path.c_str());
+		close(fd);
+		return;
+	}
+	strncpy(addr.sun_path, path.c_str(), sizeof(addr.sun_path) - 1);
+
+	if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0 || listen(fd, 1) < 0)
+	{
+		WARN_LOG(SLIPPI, "Could not listen on direct channel socket at %s", path.c_str());
+		close(fd);
+		return;
+	}
+
+	m_direct_listen_fd = fd;
+	INFO_LOG(SLIPPI, "Direct channel listening at %s", path.c_str());
+#else
+	(void)path;
+#endif
+}
+
+// CALLED FROM SERVER THREAD, each loop iteration. Non-blocking accept;
+// a new client replaces any previous one.
+void SlippiSpectateServer::directAccept()
+{
+#ifndef _WIN32
+	if (m_direct_listen_fd < 0)
+	{
+		return;
+	}
+
+	int client = accept(m_direct_listen_fd, nullptr, nullptr);
+	if (client < 0)
+	{
+		return;
+	}
+
+	// The game thread must never block on this socket: non-blocking,
+	// with a send buffer deep enough (~2000 frames at ~500B) that only
+	// a genuinely dead or wedged client ever fills it.
+	int flags = fcntl(client, F_GETFL, 0);
+	fcntl(client, F_SETFL, flags | O_NONBLOCK);
+	int sndbuf = 1 << 20;
+	setsockopt(client, SOL_SOCKET, SO_SNDBUF, &sndbuf, sizeof(sndbuf));
+
+	int old = m_direct_fd.exchange(client, std::memory_order_acq_rel);
+	if (old >= 0)
+	{
+		close(old);
+	}
+
+	INFO_LOG(SLIPPI, "Direct channel client connected");
+#endif
 }
 
 // CALLED FROM DOLPHIN MAIN THREAD
@@ -306,16 +432,32 @@ void SlippiSpectateServer::SlippicommSocketThread(void)
 		return;
 	}
 
+	// The direct channel piggybacks on this thread for accepts only;
+	// its per-event writes happen on the game thread (see directWrite).
+	if (!SConfig::GetInstance().m_slippiDirectChannelPath.empty())
+	{
+		directListen(SConfig::GetInstance().m_slippiDirectChannelPath);
+	}
+
 	// Main slippicomm server loop
 	while (1)
 	{
 		// If we're told to stop, then quit
 		if (m_stop_socket_thread)
 		{
+#ifndef _WIN32
+			int direct = m_direct_fd.exchange(-1);
+			if (direct >= 0)
+				close(direct);
+			if (m_direct_listen_fd >= 0)
+				close(m_direct_listen_fd);
+#endif
 			enet_host_destroy(server);
 			enet_deinitialize();
 			return;
 		}
+
+		directAccept();
 
 		// Pop off any events in the queue
 		popEvents();

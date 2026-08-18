@@ -98,6 +98,10 @@ struct SConfig : NonCopyable
 	// enable Slippi Networking output
 	bool m_enableSpectator;
 	int m_spectator_local_port;
+	// When non-empty: a unix domain socket path where every raw Slippi
+	// event payload is pushed, length-prefixed, straight from the game
+	// thread (the "direct channel" — no ENet/JSON, for bot clients).
+	std::string m_slippiDirectChannelPath;
 
 	// Settings
 	bool bEnableDebugging = false;

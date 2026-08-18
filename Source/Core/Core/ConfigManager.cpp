@@ -284,6 +284,7 @@ void SConfig::SaveCoreSettings(IniFile &ini)
 	core->Set("SlippiOnlineDelay", m_slippiOnlineDelay);
 	core->Set("SlippiEnableSpectator", m_enableSpectator);
 	core->Set("SlippiSpectatorLocalPort", m_spectator_local_port);
+	core->Set("SlippiDirectChannelPath", m_slippiDirectChannelPath);
 	core->Set("SlippiSaveReplays", m_slippiSaveReplays);
 	core->Set("SlippiRegenerateReplays", m_slippiRegenerateReplays);
 	core->Set("SlippiEnableQuickChat", m_slippiEnableQuickChat);
@@ -630,6 +631,7 @@ void SConfig::LoadCoreSettings(IniFile &ini)
 	core->Get("SlippiJukeboxVolume", &iSlippiJukeboxVolume, 100);
 	core->Get("SlippiEnableSpectator", &m_enableSpectator, true);
 	core->Get("SlippiSpectatorLocalPort", &m_spectator_local_port, 51441);
+	core->Get("SlippiDirectChannelPath", &m_slippiDirectChannelPath, "");
 	core->Get("SlippiOnlineDelay", &m_slippiOnlineDelay, 2);
 	core->Get("SlippiSaveReplays", &m_slippiSaveReplays, true);
 	core->Get("SlippiRegenerateReplays", &m_slippiRegenerateReplays, false);

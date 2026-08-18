@@ -83,6 +83,20 @@ class SlippiSpectateServer
 	std::condition_variable m_wake_cv;
 	std::mutex m_wake_mutex;
 
+	// The "direct channel": when SlippiDirectChannelPath is configured, a
+	//  unix domain socket is listened on and every raw event payload is
+	//  sent to the connected client straight from the GAME thread as
+	//  <u32 big-endian length><payload> — no ENet, no JSON/base64, no
+	//  thread hop. One client at a time; a client that cannot keep up
+	//  (send would block) is dropped rather than stalling emulation.
+	//  Accepts happen on the server thread's loop; only the fd crosses
+	//  threads, atomically.
+	std::atomic<int> m_direct_fd{-1};
+	int m_direct_listen_fd = -1;
+	void directListen(const std::string &path);
+	void directAccept();
+	void directWrite(const u8 *payload, u32 length);
+
 	// ONLY ACCESSED FROM SERVER THREAD
 	bool m_in_game;
 	std::map<u16, std::shared_ptr<SlippiSocket>> m_sockets;
