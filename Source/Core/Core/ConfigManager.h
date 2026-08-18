@@ -102,6 +102,9 @@ struct SConfig : NonCopyable
 	// event payload is pushed, length-prefixed, straight from the game
 	// thread (the "direct channel" — no ENet/JSON, for bot clients).
 	std::string m_slippiDirectChannelPath;
+	// Serve CMD_OVERWRITE_INPUTS pads from the direct channel (lockstep:
+	// the input read blocks until the client commits a pad batch).
+	bool m_slippiDirectInputs;
 
 	// Settings
 	bool bEnableDebugging = false;

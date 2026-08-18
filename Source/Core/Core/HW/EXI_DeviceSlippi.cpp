@@ -3250,6 +3250,17 @@ void CEXISlippi::handleGetRank()
 void CEXISlippi::prepareOverwriteInputs()
 {
 	m_read_queue.clear();
+
+	// Direct-channel inputs (lockstep): block until the client commits a
+	// fresh pad batch for this frame. The pipe path below still runs —
+	// pipes pace menus and the client keeps flushing them — but any port
+	// with a channel pad is served from the channel instead.
+	bool direct = false;
+	if (SConfig::GetInstance().m_slippiDirectInputs)
+	{
+		direct = SlippiSpectateServer::getInstance()->directDrainInputs(true);
+	}
+
 	// If blocking pipe input is configured, this will block until pipe input is sent for this frame
 	g_controller_interface.UpdateInput();
 	std::map<int, SlippiPad> pads =	g_controller_interface.GetSlippiPads();
@@ -3257,7 +3268,16 @@ void CEXISlippi::prepareOverwriteInputs()
 	// Insert the pads
 	for (int i = 1; i <= 4; i++)
 	{
-		if (pads.count(i-1) != 0)
+		u8 channel_pad[SLIPPI_PAD_DATA_SIZE];
+		if (direct && SlippiSpectateServer::getInstance()->directPad(i, channel_pad))
+		{
+			m_read_queue.push_back(1);
+			for (int j = 0; j < SLIPPI_PAD_DATA_SIZE; j++)
+			{
+				m_read_queue.push_back(channel_pad[j]);
+			}
+		}
+		else if (pads.count(i-1) != 0)
 		{
 			// Do overwrite this port
 			m_read_queue.push_back(1);

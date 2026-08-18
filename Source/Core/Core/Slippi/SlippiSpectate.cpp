@@ -11,6 +11,8 @@
 #else
 #include <errno.h>
 #include <fcntl.h>
+#include <poll.h>
+#include <string.h>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <unistd.h>
@@ -31,10 +33,131 @@ void SlippiSpectateServer::write(u8 *payload, u32 length)
 	{
 		return;
 	}
+	// Keep the channel's receive side drained even while nothing reads
+	// pads (menus): input batches sent every step must never back up
+	// the socket. Runs on every event write, i.e. every frame.
+	directDrainInputs(false);
 	directWrite(payload, length);
 	std::string str_payload((char *)payload, length);
 	m_event_queue.Push(str_payload);
 	m_wake_cv.notify_one();
+}
+
+// CALLED FROM DOLPHIN MAIN THREAD. See header.
+bool SlippiSpectateServer::directDrainInputs(bool block)
+{
+#ifndef _WIN32
+	if (block)
+	{
+		// A blocking call is the lockstep gate: only a batch that
+		// arrives from here on counts as this frame's inputs.
+		m_direct_got_batch = false;
+	}
+
+	while (1)
+	{
+		int fd = m_direct_fd.load(std::memory_order_acquire);
+		if (fd < 0)
+		{
+			return m_direct_got_batch;
+		}
+
+		u8 buf[4096];
+		ssize_t got = recv(fd, buf, sizeof(buf), 0);
+		if (got > 0)
+		{
+			m_direct_rx.insert(m_direct_rx.end(), buf, buf + got);
+
+			// Parse complete <u32 len><payload> frames.
+			while (m_direct_rx.size() >= 4)
+			{
+				u32 len = ((u32)m_direct_rx[0] << 24) | ((u32)m_direct_rx[1] << 16) |
+				          ((u32)m_direct_rx[2] << 8) | (u32)m_direct_rx[3];
+				if (len > 4096)
+				{
+					WARN_LOG(SLIPPI, "Direct channel input frame too large (%u); dropping client", len);
+					m_direct_fd.store(-1, std::memory_order_release);
+					close(fd);
+					m_direct_rx.clear();
+					return m_direct_got_batch;
+				}
+				if (m_direct_rx.size() < 4 + len)
+				{
+					break;
+				}
+
+				const u8 *payload = m_direct_rx.data() + 4;
+				// 0x01 = pad batch: count, then per pad: port (1-4) + 8 bytes.
+				if (len >= 2 && payload[0] == 0x01)
+				{
+					u8 count = payload[1];
+					if (len == (u32)(2 + count * 9))
+					{
+						for (u8 i = 0; i < count; i++)
+						{
+							const u8 *entry = payload + 2 + i * 9;
+							u8 port = entry[0];
+							if (port >= 1 && port <= 4)
+							{
+								memcpy(m_direct_pad_bufs[port - 1], entry + 1, 8);
+								m_direct_pad_set[port - 1] = true;
+							}
+						}
+						m_direct_got_batch = true;
+					}
+				}
+
+				m_direct_rx.erase(m_direct_rx.begin(), m_direct_rx.begin() + 4 + len);
+			}
+
+			continue; // there may be more readable data
+		}
+
+		if (got == 0 || (got < 0 && errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR))
+		{
+			// Client hung up (or hard error): drop it so blocked callers
+			// fall through instead of waiting forever.
+			m_direct_fd.store(-1, std::memory_order_release);
+			close(fd);
+			m_direct_rx.clear();
+			return m_direct_got_batch;
+		}
+
+		// Nothing readable right now.
+		if (!block || m_direct_got_batch)
+		{
+			return m_direct_got_batch;
+		}
+
+		struct pollfd pfd = {fd, POLLIN, 0};
+		poll(&pfd, 1, 10);
+
+		if (m_stop_socket_thread)
+		{
+			return m_direct_got_batch;
+		}
+	}
+#else
+	(void)block;
+	return false;
+#endif
+}
+
+// CALLED FROM DOLPHIN MAIN THREAD. See header.
+bool SlippiSpectateServer::directPad(int port, u8 *out)
+{
+#ifndef _WIN32
+	if (port < 1 || port > 4 || !m_direct_pad_set[port - 1])
+	{
+		return false;
+	}
+	memcpy(out, m_direct_pad_bufs[port - 1], 8);
+	return true;
+#else
+	(void)port;
+	(void)out;
+	return false;
+#endif
 }
 
 // CALLED FROM DOLPHIN MAIN THREAD. Sends one length-prefixed payload to

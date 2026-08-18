@@ -61,6 +61,15 @@ class SlippiSpectateServer
 	// If this was called due to dolphin closing then dolphin_closed will be true
 	void endGame(bool dolphin_closed = false);
 
+	// CALLED FROM DOLPHIN MAIN THREAD. Drain pending client->Dolphin
+	//  input messages from the direct channel (non-blocking), or with
+	//  block=true wait until a FRESH pad batch arrives — the lockstep
+	//  gate (a blocking call first forgets any previous batch). Returns
+	//  whether a batch has been seen.
+	bool directDrainInputs(bool block);
+	// Copy port's (1-4) latest channel pad into out; false if none yet.
+	bool directPad(int port, u8 *out);
+
 	// Don't try to copy the class. Delete those functions
 	SlippiSpectateServer(SlippiSpectateServer const &) = delete;
 	void operator=(SlippiSpectateServer const &) = delete;
@@ -96,6 +105,16 @@ class SlippiSpectateServer
 	void directListen(const std::string &path);
 	void directAccept();
 	void directWrite(const u8 *payload, u32 length);
+
+	// Client -> Dolphin input messages on the same socket, framed the
+	//  same way; payload = 0x01, port count, then per port: port number
+	//  (1-4) and an 8-byte Slippi pad buffer. ONLY touched from the
+	//  game thread (write()/prepareOverwriteInputs), so no locking —
+	//  the fd itself is the only thing that crosses threads.
+	std::vector<u8> m_direct_rx;
+	u8 m_direct_pad_bufs[4][8];
+	bool m_direct_pad_set[4] = {false, false, false, false};
+	bool m_direct_got_batch = false;
 
 	// ONLY ACCESSED FROM SERVER THREAD
 	bool m_in_game;
