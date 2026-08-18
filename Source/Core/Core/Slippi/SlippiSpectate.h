@@ -2,7 +2,9 @@
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <map>
+#include <mutex>
 #include <thread>
 
 #include "Common/FifoQueue.h"
@@ -73,6 +75,13 @@ class SlippiSpectateServer
 	// Bool gets flipped by the destrctor to tell the server thread to shut down
 	//  bools are probably atomic by default, but just for safety...
 	std::atomic<bool> m_stop_socket_thread;
+	// Wakes the server thread the moment an event is pushed, so a frame's
+	//  events go out immediately instead of waiting out the service loop's
+	//  millisecond sleep. The producer never takes the mutex (notify_one
+	//  without a waiter is nearly free); a lost wakeup is bounded by the
+	//  server thread's wait_for timeout, which matches the old cadence.
+	std::condition_variable m_wake_cv;
+	std::mutex m_wake_mutex;
 
 	// ONLY ACCESSED FROM SERVER THREAD
 	bool m_in_game;
