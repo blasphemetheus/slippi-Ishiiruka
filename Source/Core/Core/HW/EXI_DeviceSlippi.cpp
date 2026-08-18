@@ -174,7 +174,16 @@ CEXISlippi::CEXISlippi()
 	directCodes = std::make_unique<SlippiDirectCodes>(slprs_exi_device_ptr, SlippiDirectCodes::DIRECT);
 	teamsCodes = std::make_unique<SlippiDirectCodes>(slprs_exi_device_ptr, SlippiDirectCodes::TEAMS);
 
-	generator = std::default_random_engine(Common::Timer::GetTimeMs());
+	// SlippiRngSeed pins the device RNG — the source of the game's
+	// CMD_GET_NEW_SEED reseeds — for reproducible runs.
+	if (SConfig::GetInstance().m_slippiRngSeed != 0)
+	{
+		generator = std::default_random_engine((u32)SConfig::GetInstance().m_slippiRngSeed);
+	}
+	else
+	{
+		generator = std::default_random_engine(Common::Timer::GetTimeMs());
+	}
 
 	shouldOutput = SConfig::GetInstance().m_coutEnabled && g_replayComm->getSettings().mode != "mirror";
 

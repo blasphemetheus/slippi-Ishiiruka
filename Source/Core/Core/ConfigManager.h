@@ -105,6 +105,14 @@ struct SConfig : NonCopyable
 	// Serve CMD_OVERWRITE_INPUTS pads from the direct channel (lockstep:
 	// the input read blocks until the client commits a pad batch).
 	bool m_slippiDirectInputs;
+	// When non-zero: seed the Slippi EXI device RNG (the source of
+	// CMD_GET_NEW_SEED replies, stage shuffles and rng offsets) with
+	// this value instead of wall-clock time — reproducible runs.
+	int m_slippiRngSeed;
+	// When non-zero: seed the Slippi EXI device's RNG (the source of
+	// CMD_GET_NEW_SEED replies, stage shuffles and rng offsets) with
+	// this value instead of wall-clock time — reproducible runs.
+	int m_slippiRngSeed;
 
 	// Settings
 	bool bEnableDebugging = false;
